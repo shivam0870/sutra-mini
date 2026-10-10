@@ -1,0 +1,101 @@
+name: sutra-mini
+
+x-backend: &backend
+  build: .
+  environment: &backend-env
+    DATABASE_URL: ${DATABASE_URL:-postgres://sutra:sutra@db:5432/sutra?sslmode=disable}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: sutra
+      POSTGRES_PASSWORD: sutra
+      POSTGRES_DB: sutra
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sutra -d sutra"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    command: ["api"]
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mock:
+    <<: *backend
+    command: ["mock"]
+    environment:
+      <<: *backend-env
+      MOCK_MODE: ${MOCK_MODE:-random}
+    ports: ["127.0.0.1:8081:8081"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    <<: *backend
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+      ACCOUNTING_URL: http://mock:8081/api/vouchers
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-5}
+      WORKER_HTTP_TIMEOUT: ${WORKER_HTTP_TIMEOUT:-1s}
+      WORKER_LEASE_DURATION: ${WORKER_LEASE_DURATION:-10s}
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-250ms}
+      WORKER_BASE_BACKOFF: ${WORKER_BASE_BACKOFF:-1s}
+      WORKER_MAX_BACKOFF: ${WORKER_MAX_BACKOFF:-30s}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mock:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      args:
+        API_URL: http://api:8080
+    environment:
+      API_URL: http://api:8080
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  test:
+    build:
+      context: .
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgres://sutra:sutra@db:5432/sutra?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["test"]
+
+volumes:
+  postgres-data:

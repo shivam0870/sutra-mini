@@ -1,0 +1,31 @@
+# An isolated E2E project: all traffic stays inside its Docker network.
+# !reset requires Docker Compose 2.24.4 or newer.
+services:
+  db:
+    ports: !reset []
+  api:
+    ports: !reset []
+  mock:
+    ports: !reset []
+  web:
+    ports: !reset []
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/sync').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 45
+  browser:
+    build:
+      context: ./web
+      target: e2e
+    environment:
+      CI: "true"
+      E2E_BASE_URL: http://web:3000
+      E2E_REQUIRE_RETRY: "true"
+    volumes:
+      - ${E2E_ARTIFACTS_DIR:-./artifacts}/playwright:/app/playwright-report
+      - ${E2E_ARTIFACTS_DIR:-./artifacts}/test-results:/app/test-results
+    depends_on:
+      web:
+        condition: service_healthy
+    profiles: ["test"]
